@@ -4,7 +4,7 @@ const { GoogleAuth } = require("google-auth-library");
 
 const router = express.Router();
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || "us-central1";
 
 function parseJsonFromModelOutput(text) {
