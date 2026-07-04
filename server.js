@@ -6,6 +6,7 @@ const pdfParse = require("pdf-parse");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const analyzeRoutes = require("./routes/analyze");
 const app = express();
 
 const uploadDir = path.join(os.tmpdir(), "uploads");
@@ -33,7 +34,8 @@ async function extractPdfText(filePath) {
 }
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
+app.use("/api/resume", analyzeRoutes);
 
 app.post(
   "/api/resume/upload",
@@ -83,11 +85,5 @@ app.post(
   }
 }
 );
-
-app.post("/api/resume/analyze", (req, res) => {
-  const { content } = req.body;
-  const text = typeof content === "string" ? content : "";
-  res.json({ analysis: `Your resume has ${text.length} characters.` });
-});
 
 app.listen(5000, () => console.log("Server running on port 5000"));
