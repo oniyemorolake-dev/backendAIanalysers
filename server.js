@@ -86,4 +86,9 @@ app.post(
 }
 );
 
-app.listen(5000, () => console.log("Server running on port 5000"));
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log("GEMINI_API_KEY present:", Boolean(process.env.GEMINI_API_KEY));
+});

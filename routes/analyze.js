@@ -3,25 +3,66 @@ const axios = require("axios");
 
 const router = express.Router();
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+
+function parseJsonFromModelOutput(text) {
+  if (!text || typeof text !== "string") return null;
+
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch (_) {
+    /* fall through */
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch (_) {
+      /* fall through */
+    }
+  }
+
+  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (objectMatch) {
+    try {
+      return JSON.parse(objectMatch[0]);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 async function callGemini(prompt) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Missing GEMINI_API_KEY env var");
 
-  const model = "models/text-bison-001";
-  const endpoint = `https://us-central1-aiplatform.googleapis.com/v1/${model}:predict`;
-  const url = `${endpoint}?key=${encodeURIComponent(apiKey)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const body = {
-    instances: [{ content: prompt }],
-    parameters: { temperature: 0.2, maxOutputTokens: 800 },
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 1024,
+      responseMimeType: "application/json",
+    },
   };
 
   const resp = await axios.post(url, body, {
     headers: { "Content-Type": "application/json" },
-    timeout: 30000,
+    timeout: 60000,
   });
 
-  return resp.data;
+  const text = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    const reason = resp.data?.candidates?.[0]?.finishReason || "unknown";
+    throw new Error(`Gemini returned no text (finishReason: ${reason})`);
+  }
+
+  return text;
 }
 
 router.post("/analyze", async (req, res) => {
@@ -31,40 +72,18 @@ router.post("/analyze", async (req, res) => {
       return res.status(400).json({ error: "Missing resume text in request body" });
     }
 
-    const prompt = `
-You are an expert resume reviewer. Analyze the following resume text and return a JSON object with keys:
-strengths: array of short strings
-weaknesses: array of short strings
-missingKeywords: array of suggested keywords
-formattingSuggestions: array of short strings
-score: integer 0-100
-Return only valid JSON. Resume text:
-"""${text.replace(/`/g, "'")}"""
-`;
+    const prompt = `You are an expert resume reviewer. Analyze the resume text below and respond with ONLY a JSON object (no markdown, no commentary) using exactly these keys:
+- strengths: array of short strings
+- weaknesses: array of short strings
+- missingKeywords: array of suggested keywords for ATS and role fit
+- formattingSuggestions: array of short strings
+- score: integer from 0 to 100
 
-    const aiResponse = await callGemini(prompt);
+Resume text:
+"""${text.replace(/"/g, "'").slice(0, 12000)}"""`;
 
-    let generated = "";
-    if (aiResponse && Array.isArray(aiResponse.predictions) && aiResponse.predictions.length > 0) {
-      const p = aiResponse.predictions[0];
-      generated = p.content || p.text || JSON.stringify(p);
-    } else {
-      generated = JSON.stringify(aiResponse);
-    }
-
-    let parsed = null;
-    try {
-      parsed = JSON.parse(generated);
-    } catch (e) {
-      const jsonMatch = generated.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          parsed = JSON.parse(jsonMatch[0]);
-        } catch (e2) {
-          parsed = null;
-        }
-      }
-    }
+    const generated = await callGemini(prompt);
+    const parsed = parseJsonFromModelOutput(generated);
 
     if (!parsed) {
       return res.json({ raw: generated, note: "AI output could not be parsed as JSON" });
@@ -78,8 +97,13 @@ Return only valid JSON. Resume text:
       score: parsed.score ?? null,
     });
   } catch (err) {
-    console.error("Analyze error:", err.response ? err.response.data : err.message || err);
-    return res.status(500).json({ error: "AI analysis failed" });
+    const detail =
+      err.response?.data?.error?.message ||
+      err.response?.data?.error ||
+      err.message ||
+      String(err);
+    console.error("Analyze error:", detail);
+    return res.status(500).json({ error: "AI analysis failed", detail });
   }
 });
 
