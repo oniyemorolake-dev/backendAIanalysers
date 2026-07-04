@@ -89,8 +89,10 @@ app.post(
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
   console.log(`Server running on port ${PORT}`);
-  console.log("GEMINI_API_KEY present:", Boolean(process.env.GEMINI_API_KEY?.trim()));
+  console.log("GEMINI_API_KEY present:", Boolean(apiKey));
+  console.log("GEMINI_API_KEY prefix:", apiKey ? `${apiKey.slice(0, 7)}...` : "(not set)");
   console.log(
     "Vertex service account present:",
     Boolean(

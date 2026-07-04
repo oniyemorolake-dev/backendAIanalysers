@@ -4,7 +4,21 @@ const { GoogleAuth } = require("google-auth-library");
 
 const router = express.Router();
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-lite";
+const DEFAULT_MODELS = [
+  "gemini-2.0-flash-lite",
+  "gemini-2.0-flash",
+  "gemini-1.5-flash-8b",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-1.5-flash-latest",
+];
+
+const MODEL_FALLBACKS = (
+  process.env.GEMINI_MODEL
+    ? [process.env.GEMINI_MODEL, ...DEFAULT_MODELS]
+    : DEFAULT_MODELS
+).filter((model, index, list) => model && list.indexOf(model) === index);
+
 const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || "us-central1";
 
 function parseJsonFromModelOutput(text) {
@@ -58,6 +72,26 @@ function extractGeneratedText(data) {
   return text;
 }
 
+function getApiErrorDetail(err) {
+  return (
+    err.response?.data?.error?.message ||
+    err.response?.data?.error ||
+    err.message ||
+    String(err)
+  );
+}
+
+function isRetryableModelError(detail) {
+  const message = String(detail).toLowerCase();
+  return (
+    message.includes("quota") ||
+    message.includes("rate limit") ||
+    message.includes("not found") ||
+    message.includes("not supported") ||
+    message.includes("limit: 0")
+  );
+}
+
 function readServiceAccountCredentials() {
   const candidates = [
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
@@ -78,13 +112,8 @@ function readServiceAccountCredentials() {
   return null;
 }
 
-async function callGeminiWithApiKey(prompt) {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey || apiKey.startsWith("{")) {
-    throw new Error("Missing GEMINI_API_KEY env var");
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+async function callGeminiModelWithApiKey(apiKey, model, prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const resp = await axios.post(url, buildGeminiBody(prompt), {
     headers: {
       "Content-Type": "application/json",
@@ -94,6 +123,32 @@ async function callGeminiWithApiKey(prompt) {
   });
 
   return extractGeneratedText(resp.data);
+}
+
+async function callGeminiWithApiKey(prompt) {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey || apiKey.startsWith("{")) {
+    throw new Error("Missing GEMINI_API_KEY env var");
+  }
+
+  let lastError = null;
+
+  for (const model of MODEL_FALLBACKS) {
+    try {
+      const text = await callGeminiModelWithApiKey(apiKey, model, prompt);
+      console.log(`Gemini analysis succeeded with model: ${model}`);
+      return text;
+    } catch (err) {
+      lastError = err;
+      const detail = getApiErrorDetail(err);
+      console.warn(`Gemini model ${model} failed:`, detail);
+      if (!isRetryableModelError(detail)) {
+        throw err;
+      }
+    }
+  }
+
+  throw lastError || new Error("All Gemini models failed");
 }
 
 async function callGeminiWithServiceAccount(prompt) {
@@ -123,16 +178,32 @@ async function callGeminiWithServiceAccount(prompt) {
     throw new Error("Failed to obtain Google Cloud access token");
   }
 
-  const url = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${VERTEX_LOCATION}/publishers/google/models/${GEMINI_MODEL}:generateContent`;
-  const resp = await axios.post(url, buildGeminiBody(prompt), {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    timeout: 60000,
-  });
+  let lastError = null;
 
-  return extractGeneratedText(resp.data);
+  for (const model of MODEL_FALLBACKS) {
+    try {
+      const url = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${VERTEX_LOCATION}/publishers/google/models/${model}:generateContent`;
+      const resp = await axios.post(url, buildGeminiBody(prompt), {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 60000,
+      });
+
+      console.log(`Vertex analysis succeeded with model: ${model}`);
+      return extractGeneratedText(resp.data);
+    } catch (err) {
+      lastError = err;
+      const detail = getApiErrorDetail(err);
+      console.warn(`Vertex model ${model} failed:`, detail);
+      if (!isRetryableModelError(detail)) {
+        throw err;
+      }
+    }
+  }
+
+  throw lastError || new Error("All Vertex models failed");
 }
 
 async function callGemini(prompt) {
@@ -174,11 +245,7 @@ Resume text:
       score: parsed.score ?? null,
     });
   } catch (err) {
-    const detail =
-      err.response?.data?.error?.message ||
-      err.response?.data?.error ||
-      err.message ||
-      String(err);
+    const detail = getApiErrorDetail(err);
     console.error("Analyze error:", detail);
     return res.status(500).json({ error: "AI analysis failed", detail });
   }
