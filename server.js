@@ -8,6 +8,7 @@ const path = require("path");
 const os = require("os");
 const analyzeRoutes = require("./routes/analyze");
 const paymentRoutes = require("./routes/payment");
+const leadsRoutes = require("./routes/leads");
 const app = express();
 
 const uploadDir = path.join(os.tmpdir(), "uploads");
@@ -53,6 +54,7 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 app.use("/api/resume", analyzeRoutes);
 app.use("/api/resume", paymentRoutes);
+app.use("/api/resume", leadsRoutes);
 
 app.post(
   "/api/resume/upload",

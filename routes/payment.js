@@ -8,6 +8,8 @@ const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || "";
 const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$4.99";
 
 const verifiedSessions = new Map();
+const verifiedReferrals = new Map();
+const redeemedDevices = new Set();
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY?.trim();
@@ -55,6 +57,17 @@ async function verifyStripeSession(sessionId) {
   }
 }
 
+function isReferralTokenVerified(token) {
+  if (!token || !String(token).startsWith("referral_")) return false;
+  const entry = verifiedReferrals.get(token);
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    verifiedReferrals.delete(token);
+    return false;
+  }
+  return true;
+}
+
 function isPremiumUnlocked(req) {
   const unlockToken =
     req.body?.unlockToken ||
@@ -62,6 +75,10 @@ function isPremiumUnlocked(req) {
     req.query?.unlockToken;
 
   if (unlockToken && isSessionVerified(unlockToken)) {
+    return true;
+  }
+
+  if (unlockToken && isReferralTokenVerified(unlockToken)) {
     return true;
   }
 
@@ -132,6 +149,43 @@ router.post("/verify-session", async (req, res) => {
     paid: true,
     unlockToken: result.sessionId,
     message: "Premium report unlocked for 24 hours on this device.",
+  });
+});
+
+router.post("/referral/redeem", (req, res) => {
+  const { refCode, deviceId } = req.body;
+
+  if (!refCode || String(refCode).trim().length < 6) {
+    return res.status(400).json({ error: "Invalid referral code" });
+  }
+
+  const normalizedDevice = String(deviceId || "anonymous").slice(0, 120);
+  if (redeemedDevices.has(normalizedDevice)) {
+    return res.status(409).json({ error: "Referral already redeemed on this device" });
+  }
+
+  const unlockToken = `referral_${String(refCode).trim().toLowerCase()}_${Date.now()}`;
+  verifiedReferrals.set(unlockToken, {
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+  });
+  redeemedDevices.add(normalizedDevice);
+
+  return res.json({
+    ok: true,
+    unlockToken,
+    message: "Referral unlocked! Enjoy one premium report free for 24 hours.",
+  });
+});
+
+router.get("/referral/link", (req, res) => {
+  const ref = String(req.query.code || "").trim();
+  if (ref.length < 6) {
+    return res.status(400).json({ error: "Referral code required" });
+  }
+
+  return res.json({
+    shareUrl: `${FRONTEND_URL}/index.html?ref=${encodeURIComponent(ref)}`,
+    message: "Friends who use your link get one free premium report.",
   });
 });
 
