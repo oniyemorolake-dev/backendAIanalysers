@@ -4,9 +4,10 @@ const multer = require("multer");
 const mammoth = require("mammoth");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const app = express();
 
-const uploadDir = path.join(__dirname, "tmp", "uploads");
+const uploadDir = path.join(os.tmpdir(), "uploads");
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const upload = multer({
@@ -17,14 +18,24 @@ const upload = multer({
 app.use(cors());
 app.use(express.json());
 
-app.post("/api/resume/upload", upload.single("file"), async (req, res) => {
+app.post(
+  "/api/resume/upload",
+  upload.fields([
+    { name: "file", maxCount: 1 },
+    { name: "resume", maxCount: 1 },
+  ]),
+  async (req, res) => {
   try {
-    if (!req.file) {
+    const uploaded =
+      (req.files && req.files.file && req.files.file[0]) ||
+      (req.files && req.files.resume && req.files.resume[0]);
+
+    if (!uploaded) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const uploadedPath = req.file.path;
-    const originalName = req.file.originalname;
+    const uploadedPath = uploaded.path;
+    const originalName = uploaded.originalname;
     const ext = path.extname(originalName).toLowerCase();
 
     if (ext !== ".docx") {
@@ -45,12 +56,16 @@ app.post("/api/resume/upload", upload.single("file"), async (req, res) => {
     });
   } catch (err) {
     console.error("Upload error:", err);
-    if (req.file && req.file.path) {
-      fs.unlink(req.file.path, () => {});
+    const uploaded =
+      (req.files && req.files.file && req.files.file[0]) ||
+      (req.files && req.files.resume && req.files.resume[0]);
+    if (uploaded && uploaded.path) {
+      fs.unlink(uploaded.path, () => {});
     }
     return res.status(500).json({ error: "Failed to extract text from .docx" });
   }
-});
+}
+);
 
 app.post("/api/resume/analyze", (req, res) => {
   const { content } = req.body;
