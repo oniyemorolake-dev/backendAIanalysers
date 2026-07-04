@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const { GoogleAuth } = require("google-auth-library");
+const { isPremiumUnlocked, PREMIUM_PRICE_LABEL } = require("./payment");
 
 const router = express.Router();
 
@@ -20,6 +21,7 @@ const MODEL_FALLBACKS = (
 ).filter((model, index, list) => model && list.indexOf(model) === index);
 
 const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || "us-central1";
+const FREE_STRENGTHS_PREVIEW = 3;
 
 function parseJsonFromModelOutput(text) {
   if (!text || typeof text !== "string") return null;
@@ -57,7 +59,7 @@ function buildGeminiBody(prompt) {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.2,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 1400,
       responseMimeType: "application/json",
     },
   };
@@ -226,23 +228,84 @@ async function callGemini(prompt) {
   return callGeminiWithApiKey(prompt);
 }
 
+function buildAnalysisPrompt(text, jobDescription) {
+  const safeText = text.replace(/"/g, "'").slice(0, 12000);
+  const safeJob = jobDescription
+    ? jobDescription.replace(/"/g, "'").slice(0, 6000)
+    : "";
+
+  const jobSection = safeJob
+    ? `
+Also compare the resume against this target job description and include:
+- jobMatchScore: integer 0-100 for fit to this specific role
+- jobMatchedKeywords: array of important keywords/phrases from the job description that ARE present in the resume
+- jobMissingKeywords: array of important keywords/phrases from the job description that are MISSING from the resume
+- jobFitSummary: one short paragraph explaining fit for this role
+
+Target job description:
+"""${safeJob}"""`
+    : `
+No job description was provided. Set jobMatchScore to null, jobMatchedKeywords to [], jobMissingKeywords to [], and jobFitSummary to ""`;
+
+  return `You are an expert resume reviewer and ATS specialist. Analyze the resume text below and respond with ONLY a JSON object (no markdown, no commentary) using exactly these keys:
+- strengths: array of short strings
+- weaknesses: array of short strings
+- missingKeywords: array of suggested ATS keywords for general job search fit
+- formattingSuggestions: array of short strings
+- score: integer from 0 to 100 for overall resume quality
+${jobSection}
+
+Resume text:
+"""${safeText}"""`;
+}
+
+function buildFullResponse(parsed) {
+  return {
+    score: parsed.score ?? null,
+    strengths: parsed.strengths || [],
+    weaknesses: parsed.weaknesses || [],
+    missingKeywords: parsed.missingKeywords || [],
+    formattingSuggestions: parsed.formattingSuggestions || [],
+    jobMatchScore: parsed.jobMatchScore ?? null,
+    jobMatchedKeywords: parsed.jobMatchedKeywords || [],
+    jobMissingKeywords: parsed.jobMissingKeywords || [],
+    jobFitSummary: parsed.jobFitSummary || "",
+  };
+}
+
+function buildFreeResponse(parsed) {
+  const strengths = parsed.strengths || [];
+
+  return {
+    tier: "free",
+    locked: true,
+    priceLabel: PREMIUM_PRICE_LABEL,
+    score: parsed.score ?? null,
+    strengthsPreview: strengths.slice(0, FREE_STRENGTHS_PREVIEW),
+    lockedSections: [
+      "Full weaknesses breakdown",
+      "Complete ATS keyword list",
+      "Formatting suggestions",
+      "Job description match score",
+    ],
+    upgradeMessage: `Unlock your full AI report for ${PREMIUM_PRICE_LABEL}.`,
+  };
+}
+
 router.post("/analyze", async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, jobDescription } = req.body;
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return res.status(400).json({ error: "Missing resume text in request body" });
     }
 
-    const prompt = `You are an expert resume reviewer. Analyze the resume text below and respond with ONLY a JSON object (no markdown, no commentary) using exactly these keys:
-- strengths: array of short strings
-- weaknesses: array of short strings
-- missingKeywords: array of suggested keywords for ATS and role fit
-- formattingSuggestions: array of short strings
-- score: integer from 0 to 100
+    const jobText =
+      typeof jobDescription === "string" && jobDescription.trim().length > 0
+        ? jobDescription.trim()
+        : "";
 
-Resume text:
-"""${text.replace(/"/g, "'").slice(0, 12000)}"""`;
-
+    const premium = isPremiumUnlocked(req);
+    const prompt = buildAnalysisPrompt(text, jobText);
     const generated = await callGemini(prompt);
     const parsed = parseJsonFromModelOutput(generated);
 
@@ -250,13 +313,15 @@ Resume text:
       return res.json({ raw: generated, note: "AI output could not be parsed as JSON" });
     }
 
-    return res.json({
-      strengths: parsed.strengths || [],
-      weaknesses: parsed.weaknesses || [],
-      missingKeywords: parsed.missingKeywords || [],
-      formattingSuggestions: parsed.formattingSuggestions || [],
-      score: parsed.score ?? null,
-    });
+    if (premium) {
+      return res.json({
+        tier: "premium",
+        locked: false,
+        ...buildFullResponse(parsed),
+      });
+    }
+
+    return res.json(buildFreeResponse(parsed));
   } catch (err) {
     const detail = getApiErrorDetail(err);
     console.error("Analyze error:", detail);

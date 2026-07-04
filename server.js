@@ -7,6 +7,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const analyzeRoutes = require("./routes/analyze");
+const paymentRoutes = require("./routes/payment");
 const app = express();
 
 const uploadDir = path.join(os.tmpdir(), "uploads");
@@ -49,8 +50,9 @@ async function extractPdfText(filePath) {
 }
 
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 app.use("/api/resume", analyzeRoutes);
+app.use("/api/resume", paymentRoutes);
 
 app.post(
   "/api/resume/upload",
@@ -117,4 +119,6 @@ app.listen(PORT, () => {
     )
   );
   console.log("GOOGLE_CLOUD_PROJECT:", process.env.GOOGLE_CLOUD_PROJECT || "(not set)");
+  console.log("Stripe configured:", Boolean(process.env.STRIPE_SECRET_KEY?.trim() && process.env.STRIPE_PRICE_ID));
+  console.log("Premium free mode:", process.env.PREMIUM_FREE_MODE === "true");
 });
