@@ -86,10 +86,16 @@ function isRetryableModelError(detail) {
   return (
     message.includes("quota") ||
     message.includes("rate limit") ||
+    message.includes("high demand") ||
     message.includes("not found") ||
     message.includes("not supported") ||
-    message.includes("limit: 0")
+    message.includes("limit: 0") ||
+    message.includes("try again")
   );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readServiceAccountCredentials() {
@@ -134,16 +140,23 @@ async function callGeminiWithApiKey(prompt) {
   let lastError = null;
 
   for (const model of MODEL_FALLBACKS) {
-    try {
-      const text = await callGeminiModelWithApiKey(apiKey, model, prompt);
-      console.log(`Gemini analysis succeeded with model: ${model}`);
-      return text;
-    } catch (err) {
-      lastError = err;
-      const detail = getApiErrorDetail(err);
-      console.warn(`Gemini model ${model} failed:`, detail);
-      if (!isRetryableModelError(detail)) {
-        throw err;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const text = await callGeminiModelWithApiKey(apiKey, model, prompt);
+        console.log(`Gemini analysis succeeded with model: ${model}`);
+        return text;
+      } catch (err) {
+        lastError = err;
+        const detail = getApiErrorDetail(err);
+        console.warn(`Gemini model ${model} attempt ${attempt + 1} failed:`, detail);
+        if (!isRetryableModelError(detail)) {
+          throw err;
+        }
+        if (attempt === 0 && /high demand|try again|rate limit/i.test(String(detail))) {
+          await sleep(3000);
+          continue;
+        }
+        break;
       }
     }
   }
