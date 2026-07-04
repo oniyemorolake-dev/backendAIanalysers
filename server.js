@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const mammoth = require("mammoth");
-const pdfParse = require("pdf-parse");
+const { PDFParse } = require("pdf-parse");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -22,15 +22,30 @@ function safeUnlink(filePath) {
   fs.unlink(filePath, () => {});
 }
 
+function normalizeExtractedText(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function extractDocxText(filePath) {
   const result = await mammoth.extractRawText({ path: filePath });
-  return result.value || "";
+  return normalizeExtractedText(result.value || "");
 }
 
 async function extractPdfText(filePath) {
   const data = fs.readFileSync(filePath);
-  const result = await pdfParse(data);
-  return result.text || "";
+  const parser = new PDFParse({ data });
+
+  try {
+    const result = await parser.getText();
+    return normalizeExtractedText(result.text || "");
+  } finally {
+    await parser.destroy();
+  }
 }
 
 app.use(cors());
