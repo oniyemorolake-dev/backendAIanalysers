@@ -90,5 +90,14 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log("GEMINI_API_KEY present:", Boolean(process.env.GEMINI_API_KEY));
+  console.log("GEMINI_API_KEY present:", Boolean(process.env.GEMINI_API_KEY?.trim()));
+  console.log(
+    "Vertex service account present:",
+    Boolean(
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+        process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON ||
+        process.env.GEMINI_API_KEY?.trim()?.startsWith("{")
+    )
+  );
+  console.log("GOOGLE_CLOUD_PROJECT:", process.env.GOOGLE_CLOUD_PROJECT || "(not set)");
 });
