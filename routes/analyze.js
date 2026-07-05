@@ -432,7 +432,7 @@ Original resume:
 
 router.post("/rewrite-resume", async (req, res) => {
   try {
-    if (!isPremiumUnlocked(req)) {
+    if (!(await isPremiumUnlocked(req))) {
       return res.status(402).json({
         error: "Premium required",
         detail: "Unlock premium to generate a job-tailored resume rewrite.",
@@ -480,7 +480,7 @@ router.post("/analyze", async (req, res) => {
         ? jobDescription.trim()
         : "";
 
-    const premium = isPremiumUnlocked(req);
+    const premium = await isPremiumUnlocked(req);
     const prompt = buildAnalysisPrompt(text, jobText);
     const generated = await callGemini(prompt);
     let parsed = parseJsonFromModelOutput(generated);

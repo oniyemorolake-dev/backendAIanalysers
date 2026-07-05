@@ -69,25 +69,30 @@ function isReferralTokenVerified(token) {
   return true;
 }
 
-function isPremiumUnlocked(req) {
+async function isPremiumUnlocked(req) {
   const unlockToken =
     req.body?.unlockToken ||
     req.headers["x-unlock-token"] ||
     req.query?.unlockToken;
 
-  if (unlockToken && isSessionVerified(unlockToken)) {
-    return true;
-  }
-
-  if (unlockToken && isReferralTokenVerified(unlockToken)) {
-    return true;
-  }
-
   if (process.env.PREMIUM_FREE_MODE === "true") {
     return true;
   }
 
-  return false;
+  if (!unlockToken) {
+    return false;
+  }
+
+  if (isReferralTokenVerified(unlockToken)) {
+    return true;
+  }
+
+  if (String(unlockToken).startsWith("cs_")) {
+    const result = await verifyStripeSession(unlockToken);
+    return result.paid === true;
+  }
+
+  return isSessionVerified(unlockToken);
 }
 
 router.get("/pricing", (_req, res) => {
