@@ -40,7 +40,7 @@ router.get("/email-status", (_req, res) => {
 });
 
 router.get("/contact", (_req, res) => {
-  const email = process.env.CONTACT_EMAIL || "hello@motechco.ca";
+  const email = process.env.CONTACT_EMAIL || "mowebsiteco@gmail.com";
   res.json({
     email,
     label: "MoTechCo support",
