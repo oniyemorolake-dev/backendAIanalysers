@@ -2,6 +2,7 @@ const express = require("express");
 const axios = require("axios");
 const { GoogleAuth } = require("google-auth-library");
 const { isPremiumUnlocked, PREMIUM_PRICE_LABEL } = require("./payment");
+const { aiRateLimit, withAiCache } = require("../middleware/aiGuard");
 
 const router = express.Router();
 
@@ -430,7 +431,7 @@ Original resume:
 """${safeText}"""`;
 }
 
-router.post("/rewrite-resume", async (req, res) => {
+router.post("/rewrite-resume", aiRateLimit, withAiCache("rewrite"), async (req, res) => {
   try {
     if (!(await isPremiumUnlocked(req))) {
       return res.status(402).json({
@@ -468,7 +469,7 @@ router.post("/rewrite-resume", async (req, res) => {
   }
 });
 
-router.post("/analyze", async (req, res) => {
+router.post("/analyze", aiRateLimit, withAiCache("analyze"), async (req, res) => {
   try {
     const { text, jobDescription } = req.body;
     if (!text || typeof text !== "string" || text.trim().length === 0) {
