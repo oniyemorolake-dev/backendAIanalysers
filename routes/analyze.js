@@ -6,12 +6,12 @@ const { isPremiumUnlocked, PREMIUM_PRICE_LABEL } = require("./payment");
 const router = express.Router();
 
 const DEFAULT_MODELS = [
-  "gemini-2.0-flash-lite",
   "gemini-2.0-flash",
-  "gemini-1.5-flash-8b",
-  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash-lite",
   "gemini-2.5-flash",
-  "gemini-1.5-flash-latest",
+  "gemini-2.5-flash-lite",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
 ];
 
 const MODEL_FALLBACKS = (
@@ -223,7 +223,7 @@ async function callGeminiWithApiKey(prompt) {
     }
   }
 
-  throw lastError || new Error("All Gemini models failed");
+  throw lastError || new Error("All Gemini models failed. Check GEMINI_API_KEY and try again.");
 }
 
 async function callGeminiWithServiceAccount(prompt) {
