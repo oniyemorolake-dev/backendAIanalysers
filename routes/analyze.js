@@ -12,11 +12,20 @@ const DEFAULT_MODELS = [
   "gemini-2.5-flash-lite",
 ];
 
+const DEPRECATED_MODELS = new Set([
+  "gemini-1.5-flash-latest",
+  "gemini-1.5-flash-8b",
+  "gemini-1.5-flash-lite",
+  "gemini-1.5-flash",
+]);
+
 const MODEL_FALLBACKS = (
   process.env.GEMINI_MODEL
     ? [process.env.GEMINI_MODEL, ...DEFAULT_MODELS]
     : DEFAULT_MODELS
-).filter((model, index, list) => model && list.indexOf(model) === index);
+)
+  .filter((model, index, list) => model && list.indexOf(model) === index)
+  .filter((model) => !DEPRECATED_MODELS.has(model));
 
 const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || "us-central1";
 const FREE_STRENGTHS_PREVIEW = 3;
@@ -150,8 +159,27 @@ function isRetryableModelError(detail) {
   );
 }
 
+function getRetryDelayMs(detail) {
+  const message = String(detail);
+  const match = message.match(/retry in ([0-9.]+)s/i);
+  if (match) return Math.ceil(Number(match[1]) * 1000) + 1000;
+  if (/quota|rate limit|free_tier/i.test(message)) return 35000;
+  return 3000;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toFriendlyAnalyzeError(detail) {
+  const message = String(detail);
+  if (/quota|rate limit|free_tier/i.test(message)) {
+    return "AI is temporarily busy (Google free tier limit). Wait about 1 minute, then click Run again.";
+  }
+  if (/not found|not supported/i.test(message)) {
+    return "AI model configuration issue on the server. Try again in a minute or contact support.";
+  }
+  return message;
 }
 
 function readServiceAccountCredentials() {
@@ -212,8 +240,8 @@ async function callGeminiWithApiKey(prompt) {
         if (!isRetryableModelError(detail)) {
           throw err;
         }
-        if (attempt === 0 && /high demand|try again|rate limit/i.test(String(detail))) {
-          await sleep(3000);
+        if (attempt === 0) {
+          await sleep(getRetryDelayMs(detail));
           continue;
         }
         break;
@@ -402,7 +430,10 @@ router.post("/analyze", async (req, res) => {
   } catch (err) {
     const detail = getApiErrorDetail(err);
     console.error("Analyze error:", detail);
-    return res.status(500).json({ error: "AI analysis failed", detail });
+    return res.status(503).json({
+      error: "AI analysis temporarily unavailable",
+      detail: toFriendlyAnalyzeError(detail),
+    });
   }
 });
 
