@@ -114,14 +114,19 @@ function extractPartialFields(text) {
   };
 }
 
-function buildGeminiBody(prompt) {
+function buildGeminiBody(prompt, { json = true } = {}) {
+  const generationConfig = {
+    temperature: json ? 0.2 : 0.35,
+    maxOutputTokens: json ? 2500 : 3200,
+  };
+
+  if (json) {
+    generationConfig.responseMimeType = "application/json";
+  }
+
   return {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 2500,
-      responseMimeType: "application/json",
-    },
+    generationConfig,
   };
 }
 
@@ -202,9 +207,9 @@ function readServiceAccountCredentials() {
   return null;
 }
 
-async function callGeminiModelWithApiKey(apiKey, model, prompt) {
+async function callGeminiModelWithApiKey(apiKey, model, prompt, options = {}) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  const resp = await axios.post(url, buildGeminiBody(prompt), {
+  const resp = await axios.post(url, buildGeminiBody(prompt, options), {
     headers: {
       "Content-Type": "application/json",
       "x-goog-api-key": apiKey,
@@ -219,7 +224,7 @@ async function callGeminiModelWithApiKey(apiKey, model, prompt) {
   return { text, finishReason };
 }
 
-async function callGeminiWithApiKey(prompt) {
+async function callGeminiWithApiKey(prompt, options = {}) {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey || apiKey.startsWith("{")) {
     throw new Error("Missing GEMINI_API_KEY env var");
@@ -230,7 +235,7 @@ async function callGeminiWithApiKey(prompt) {
   for (const model of MODEL_FALLBACKS) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const result = await callGeminiModelWithApiKey(apiKey, model, prompt);
+        const result = await callGeminiModelWithApiKey(apiKey, model, prompt, options);
         console.log(`Gemini analysis succeeded with model: ${model}`);
         return result.text;
       } catch (err) {
@@ -252,7 +257,7 @@ async function callGeminiWithApiKey(prompt) {
   throw lastError || new Error("All Gemini models failed. Check GEMINI_API_KEY and try again.");
 }
 
-async function callGeminiWithServiceAccount(prompt) {
+async function callGeminiWithServiceAccount(prompt, options = {}) {
   const credentials = readServiceAccountCredentials();
   if (!credentials) {
     throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON env var");
@@ -284,7 +289,7 @@ async function callGeminiWithServiceAccount(prompt) {
   for (const model of MODEL_FALLBACKS) {
     try {
       const url = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${VERTEX_LOCATION}/publishers/google/models/${model}:generateContent`;
-      const resp = await axios.post(url, buildGeminiBody(prompt), {
+      const resp = await axios.post(url, buildGeminiBody(prompt, options), {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
@@ -311,11 +316,11 @@ async function callGeminiWithServiceAccount(prompt) {
   throw lastError || new Error("All Vertex models failed");
 }
 
-async function callGemini(prompt) {
+async function callGemini(prompt, options = {}) {
   if (readServiceAccountCredentials()) {
-    return callGeminiWithServiceAccount(prompt);
+    return callGeminiWithServiceAccount(prompt, options);
   }
-  return callGeminiWithApiKey(prompt);
+  return callGeminiWithApiKey(prompt, options);
 }
 
 function buildAnalysisPrompt(text, jobDescription) {
@@ -392,6 +397,69 @@ function buildFreeResponse(parsed) {
     upgradeMessage: `Unlock your full AI report for ${PREMIUM_PRICE_LABEL}.`,
   };
 }
+
+function buildRewritePrompt(text, jobDescription) {
+  const safeText = text.replace(/"/g, "'").slice(0, 12000);
+  const safeJob = jobDescription.replace(/"/g, "'").slice(0, 6000);
+
+  return `You are an expert resume writer for the Canadian job market.
+
+Rewrite the resume below so it aligns with the target job description.
+
+Rules:
+- Use ONLY facts, roles, skills, education, and achievements supported by the original resume.
+- Do NOT invent employers, dates, degrees, certifications, or metrics.
+- Emphasize relevant keywords and transferable skills from the job description where honestly supported.
+- Use clear Canadian-style resume formatting: summary, core skills, experience, education.
+- Keep it ATS-friendly with plain text sections and bullet points.
+- If the job asks for something missing from the resume, do not fabricate it.
+
+Return ONLY the rewritten resume text. No markdown fences, no commentary.
+
+Target job description:
+"""${safeJob}"""
+
+Original resume:
+"""${safeText}"""`;
+}
+
+router.post("/rewrite-resume", async (req, res) => {
+  try {
+    if (!isPremiumUnlocked(req)) {
+      return res.status(402).json({
+        error: "Premium required",
+        detail: "Unlock premium to generate a job-tailored resume rewrite.",
+      });
+    }
+
+    const { text, jobDescription } = req.body;
+    if (!text || typeof text !== "string" || text.trim().length < 80) {
+      return res.status(400).json({ error: "Upload a resume before requesting a rewrite." });
+    }
+
+    if (!jobDescription || typeof jobDescription !== "string" || jobDescription.trim().length < 40) {
+      return res.status(400).json({
+        error: "Job description required",
+        detail: "Paste the target job posting above, then generate your tailored resume.",
+      });
+    }
+
+    const rewritten = await callGemini(buildRewritePrompt(text, jobDescription.trim()), { json: false });
+
+    return res.json({
+      rewrittenResume: rewritten.trim(),
+      disclaimer:
+        "Review carefully before applying. This rewrite uses only your original resume facts and AI suggestions — verify accuracy.",
+    });
+  } catch (err) {
+    const detail = getApiErrorDetail(err);
+    console.error("Rewrite error:", detail);
+    return res.status(503).json({
+      error: "Resume rewrite temporarily unavailable",
+      detail: toFriendlyAnalyzeError(detail),
+    });
+  }
+});
 
 router.post("/analyze", async (req, res) => {
   try {

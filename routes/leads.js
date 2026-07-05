@@ -39,6 +39,15 @@ router.get("/email-status", (_req, res) => {
   });
 });
 
+router.get("/contact", (_req, res) => {
+  const email = process.env.CONTACT_EMAIL || "hello@motechco.ca";
+  res.json({
+    email,
+    label: "MoTechCo support",
+    message: "Questions about your report, premium access, or a custom resume review? Email us.",
+  });
+});
+
 router.post("/email-report", async (req, res) => {
   try {
     const { email, reportText, score } = req.body;

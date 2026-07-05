@@ -10,6 +10,7 @@ const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$4.99";
 const verifiedSessions = new Map();
 const verifiedReferrals = new Map();
 const redeemedDevices = new Set();
+const PAID_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY?.trim();
@@ -47,7 +48,7 @@ async function verifyStripeSession(sessionId) {
     if (paid) {
       verifiedSessions.set(sessionId, {
         paid: true,
-        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+        expiresAt: Date.now() + PAID_SESSION_TTL_MS,
       });
     }
 
@@ -100,6 +101,7 @@ router.get("/pricing", (_req, res) => {
       "ATS keyword gaps",
       "Formatting suggestions",
       "Job description match score",
+      "Job-tailored resume rewrite",
       "Shareable score card",
     ],
   });
@@ -148,8 +150,29 @@ router.post("/verify-session", async (req, res) => {
   return res.json({
     paid: true,
     unlockToken: result.sessionId,
-    message: "Premium report unlocked for 24 hours on this device.",
+    message: "Premium report unlocked for 30 days on this device.",
   });
+});
+
+router.post("/premium-status", async (req, res) => {
+  const { unlockToken } = req.body;
+
+  if (!unlockToken) {
+    return res.json({ premium: false });
+  }
+
+  if (isReferralTokenVerified(unlockToken)) {
+    return res.json({ premium: true, source: "referral" });
+  }
+
+  if (String(unlockToken).startsWith("cs_")) {
+    const result = await verifyStripeSession(unlockToken);
+    if (result.paid) {
+      return res.json({ premium: true, source: "stripe", unlockToken: result.sessionId });
+    }
+  }
+
+  return res.json({ premium: false });
 });
 
 router.post("/referral/redeem", (req, res) => {
