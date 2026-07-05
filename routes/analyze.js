@@ -23,6 +23,26 @@ const MODEL_FALLBACKS = (
 const VERTEX_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || "us-central1";
 const FREE_STRENGTHS_PREVIEW = 3;
 
+function repairPartialJson(text) {
+  if (!text) return null;
+
+  let candidate = text.trim();
+  candidate = candidate.replace(/,\s*"[^"]*$/u, "");
+  candidate = candidate.replace(/,\s*$/u, "");
+
+  const openBraces = (candidate.match(/\{/g) || []).length - (candidate.match(/\}/g) || []).length;
+  const openBrackets = (candidate.match(/\[/g) || []).length - (candidate.match(/\]/g) || []).length;
+
+  for (let i = 0; i < openBrackets; i += 1) candidate += "]";
+  for (let i = 0; i < openBraces; i += 1) candidate += "}";
+
+  try {
+    return JSON.parse(candidate);
+  } catch (_) {
+    return null;
+  }
+}
+
 function parseJsonFromModelOutput(text) {
   if (!text || typeof text !== "string") return null;
 
@@ -38,20 +58,53 @@ function parseJsonFromModelOutput(text) {
     try {
       return JSON.parse(fenced[1].trim());
     } catch (_) {
-      /* fall through */
+      const repaired = repairPartialJson(fenced[1]);
+      if (repaired) return repaired;
     }
   }
 
-  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
+  const objectMatch = trimmed.match(/\{[\s\S]*/);
   if (objectMatch) {
     try {
       return JSON.parse(objectMatch[0]);
     } catch (_) {
-      return null;
+      const repaired = repairPartialJson(objectMatch[0]);
+      if (repaired) return repaired;
     }
   }
 
-  return null;
+  return repairPartialJson(trimmed);
+}
+
+function extractPartialFields(text) {
+  if (!text || typeof text !== "string") return null;
+
+  const scoreMatch = text.match(/"score"\s*:\s*(\d{1,3})/);
+  const strengths = [];
+  const strengthsBlock = text.match(/"strengths"\s*:\s*\[([\s\S]*)/);
+
+  if (strengthsBlock) {
+    const itemRegex = /"((?:\\.|[^"\\])*)"/g;
+    let match = itemRegex.exec(strengthsBlock[1]);
+    while (match) {
+      strengths.push(match[1].replace(/\\"/g, '"').replace(/\\n/g, "\n"));
+      match = itemRegex.exec(strengthsBlock[1]);
+    }
+  }
+
+  if (!scoreMatch && strengths.length === 0) return null;
+
+  return {
+    score: scoreMatch ? Number(scoreMatch[1]) : null,
+    strengths,
+    weaknesses: [],
+    missingKeywords: [],
+    formattingSuggestions: [],
+    jobMatchScore: null,
+    jobMatchedKeywords: [],
+    jobMissingKeywords: [],
+    jobFitSummary: "",
+  };
 }
 
 function buildGeminiBody(prompt) {
@@ -59,19 +112,22 @@ function buildGeminiBody(prompt) {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.2,
-      maxOutputTokens: 1400,
+      maxOutputTokens: 2500,
       responseMimeType: "application/json",
     },
   };
 }
 
 function extractGeneratedText(data) {
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const candidate = data?.candidates?.[0];
+  const text = candidate?.content?.parts?.[0]?.text;
+  const finishReason = candidate?.finishReason || "unknown";
+
   if (!text) {
-    const reason = data?.candidates?.[0]?.finishReason || "unknown";
-    throw new Error(`Gemini returned no text (finishReason: ${reason})`);
+    throw new Error(`Gemini returned no text (finishReason: ${finishReason})`);
   }
-  return text;
+
+  return { text, finishReason };
 }
 
 function getApiErrorDetail(err) {
@@ -130,7 +186,11 @@ async function callGeminiModelWithApiKey(apiKey, model, prompt) {
     timeout: 60000,
   });
 
-  return extractGeneratedText(resp.data);
+  const { text, finishReason } = extractGeneratedText(resp.data);
+  if (finishReason === "MAX_TOKENS") {
+    console.warn(`Gemini output truncated (MAX_TOKENS) for model ${model}`);
+  }
+  return { text, finishReason };
 }
 
 async function callGeminiWithApiKey(prompt) {
@@ -144,9 +204,9 @@ async function callGeminiWithApiKey(prompt) {
   for (const model of MODEL_FALLBACKS) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const text = await callGeminiModelWithApiKey(apiKey, model, prompt);
+        const result = await callGeminiModelWithApiKey(apiKey, model, prompt);
         console.log(`Gemini analysis succeeded with model: ${model}`);
-        return text;
+        return result.text;
       } catch (err) {
         lastError = err;
         const detail = getApiErrorDetail(err);
@@ -207,7 +267,11 @@ async function callGeminiWithServiceAccount(prompt) {
       });
 
       console.log(`Vertex analysis succeeded with model: ${model}`);
-      return extractGeneratedText(resp.data);
+      const { text, finishReason } = extractGeneratedText(resp.data);
+      if (finishReason === "MAX_TOKENS") {
+        console.warn(`Vertex output truncated (MAX_TOKENS) for model ${model}`);
+      }
+      return text;
     } catch (err) {
       lastError = err;
       const detail = getApiErrorDetail(err);
@@ -254,13 +318,16 @@ Rules:
 - If information is missing or unclear, say so in weaknesses instead of guessing.
 - Keep feedback practical and specific, not generic filler.
 - Score conservatively: 90+ only for exceptional, well-evidenced resumes.
+- Limit each array to at most 4 concise items (max 100 characters each).
+- Put "score" first in the JSON object, then strengths, then the other fields.
+- Keep the entire JSON response compact so it fits in one short object.
 
-Respond with ONLY a JSON object (no markdown, no commentary) using exactly these keys:
+Respond with ONLY a JSON object (no markdown, no commentary) using exactly these keys in this order:
+- score: integer from 0 to 100 for overall resume quality
 - strengths: array of short strings
 - weaknesses: array of short strings
 - missingKeywords: array of suggested ATS keywords for general job search fit
 - formattingSuggestions: array of short strings
-- score: integer from 0 to 100 for overall resume quality
 ${jobSection}
 
 Resume text:
@@ -315,7 +382,11 @@ router.post("/analyze", async (req, res) => {
     const premium = isPremiumUnlocked(req);
     const prompt = buildAnalysisPrompt(text, jobText);
     const generated = await callGemini(prompt);
-    const parsed = parseJsonFromModelOutput(generated);
+    let parsed = parseJsonFromModelOutput(generated);
+
+    if (!parsed) {
+      parsed = extractPartialFields(generated);
+    }
 
     if (!parsed) {
       return res.json({ raw: generated, note: "AI output could not be parsed as JSON" });
