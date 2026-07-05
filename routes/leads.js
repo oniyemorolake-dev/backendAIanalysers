@@ -29,6 +29,16 @@ async function sendViaResend(to, subject, text) {
   return true;
 }
 
+router.get("/email-status", (_req, res) => {
+  const configured = Boolean(process.env.RESEND_API_KEY?.trim());
+  res.json({
+    configured,
+    message: configured
+      ? "Email delivery is enabled."
+      : "Email delivery is not configured yet. Users can still download or print their report.",
+  });
+});
+
 router.post("/email-report", async (req, res) => {
   try {
     const { email, reportText, score } = req.body;
@@ -71,8 +81,8 @@ router.post("/email-report", async (req, res) => {
       ok: true,
       emailed,
       message: emailed
-        ? "Report sent to your inbox."
-        : "Thanks! Your report request was received. Check your inbox if email delivery is enabled.",
+        ? "Report sent to your inbox. Check spam if you do not see it within a minute."
+        : "Email delivery is not set up yet on the server. Use Download Report or Print / Save PDF below instead.",
     });
   } catch (err) {
     console.error("Email report error:", err.message || err);

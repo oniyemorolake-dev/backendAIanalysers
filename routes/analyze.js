@@ -247,7 +247,15 @@ Target job description:
     : `
 No job description was provided. Set jobMatchScore to null, jobMatchedKeywords to [], jobMissingKeywords to [], and jobFitSummary to ""`;
 
-  return `You are an expert resume reviewer and ATS specialist. Analyze the resume text below and respond with ONLY a JSON object (no markdown, no commentary) using exactly these keys:
+  return `You are an expert resume reviewer and ATS specialist. Analyze ONLY what is explicitly present in the resume text. Do not invent employers, dates, skills, degrees, or achievements that are not supported by the text.
+
+Rules:
+- Base every point on evidence from the resume.
+- If information is missing or unclear, say so in weaknesses instead of guessing.
+- Keep feedback practical and specific, not generic filler.
+- Score conservatively: 90+ only for exceptional, well-evidenced resumes.
+
+Respond with ONLY a JSON object (no markdown, no commentary) using exactly these keys:
 - strengths: array of short strings
 - weaknesses: array of short strings
 - missingKeywords: array of suggested ATS keywords for general job search fit
