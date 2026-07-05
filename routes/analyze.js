@@ -164,11 +164,15 @@ function isRetryableModelError(detail) {
   );
 }
 
+function isQuotaError(detail) {
+  return /quota|rate limit|free_tier|limit: 0/i.test(String(detail));
+}
+
 function getRetryDelayMs(detail) {
   const message = String(detail);
   const match = message.match(/retry in ([0-9.]+)s/i);
-  if (match) return Math.ceil(Number(match[1]) * 1000) + 1000;
-  if (/quota|rate limit|free_tier/i.test(message)) return 35000;
+  if (match) return Math.min(Math.ceil(Number(match[1]) * 1000) + 500, 15000);
+  if (/quota|rate limit|free_tier/i.test(message)) return 8000;
   return 3000;
 }
 
@@ -242,6 +246,9 @@ async function callGeminiWithApiKey(prompt, options = {}) {
         lastError = err;
         const detail = getApiErrorDetail(err);
         console.warn(`Gemini model ${model} attempt ${attempt + 1} failed:`, detail);
+        if (isQuotaError(detail)) {
+          throw err;
+        }
         if (!isRetryableModelError(detail)) {
           throw err;
         }
