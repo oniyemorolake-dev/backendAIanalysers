@@ -5,7 +5,8 @@ const router = express.Router();
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resume.motechco.ca";
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || "";
-const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$4.99";
+const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$6.99";
+const COMPARE_AT_LABEL = process.env.COMPARE_AT_LABEL || "$29/mo elsewhere";
 
 const verifiedSessions = new Map();
 const verifiedReferrals = new Map();
@@ -99,8 +100,14 @@ router.get("/pricing", (_req, res) => {
   const stripeConfigured = Boolean(getStripe() && STRIPE_PRICE_ID);
   res.json({
     priceLabel: PREMIUM_PRICE_LABEL,
+    compareAtLabel: COMPARE_AT_LABEL,
+    launchNote: "One job. One payment. No monthly subscription.",
     stripeConfigured,
-    freeIncludes: ["Overall resume score", "Top 3 strengths preview"],
+    freeIncludes: [
+      "Overall resume score",
+      "Top 3 strengths",
+      "3 quick fixes to try first",
+    ],
     premiumIncludes: [
       "Full strengths and weaknesses",
       "ATS keyword gaps",

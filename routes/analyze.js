@@ -389,6 +389,25 @@ function buildFullResponse(parsed) {
   };
 }
 
+function buildQuickFixesPreview(weaknesses, missingKeywords, formatting) {
+  const fixes = [];
+
+  for (const item of weaknesses) {
+    if (fixes.length >= 3) break;
+    fixes.push(item);
+  }
+  for (const keyword of missingKeywords) {
+    if (fixes.length >= 3) break;
+    fixes.push(`Add "${keyword}" if it honestly applies to your experience`);
+  }
+  for (const item of formatting) {
+    if (fixes.length >= 3) break;
+    fixes.push(item);
+  }
+
+  return fixes;
+}
+
 function buildFreeResponse(parsed) {
   const strengths = parsed.strengths || [];
   const weaknesses = parsed.weaknesses || [];
@@ -403,6 +422,11 @@ function buildFreeResponse(parsed) {
     priceLabel: PREMIUM_PRICE_LABEL,
     score: parsed.score ?? null,
     strengthsPreview: strengths.slice(0, FREE_STRENGTHS_PREVIEW),
+    quickFixesPreview: buildQuickFixesPreview(
+      weaknesses,
+      missingKeywords,
+      formatting
+    ),
     issuesFound: issuesFound > 0 ? issuesFound : null,
     lockedSections: [
       "Full weaknesses breakdown",
@@ -410,7 +434,7 @@ function buildFreeResponse(parsed) {
       "Formatting suggestions",
       "Job description match score",
     ],
-    upgradeMessage: `Unlock your full AI report for ${PREMIUM_PRICE_LABEL}.`,
+    upgradeMessage: `Unlock your full application kit for ${PREMIUM_PRICE_LABEL}.`,
   };
 }
 
