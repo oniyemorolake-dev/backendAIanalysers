@@ -391,6 +391,11 @@ function buildFullResponse(parsed) {
 
 function buildFreeResponse(parsed) {
   const strengths = parsed.strengths || [];
+  const weaknesses = parsed.weaknesses || [];
+  const missingKeywords = parsed.missingKeywords || [];
+  const formatting = parsed.formattingSuggestions || [];
+  const issuesFound =
+    weaknesses.length + missingKeywords.length + formatting.length;
 
   return {
     tier: "free",
@@ -398,6 +403,7 @@ function buildFreeResponse(parsed) {
     priceLabel: PREMIUM_PRICE_LABEL,
     score: parsed.score ?? null,
     strengthsPreview: strengths.slice(0, FREE_STRENGTHS_PREVIEW),
+    issuesFound: issuesFound > 0 ? issuesFound : null,
     lockedSections: [
       "Full weaknesses breakdown",
       "Complete ATS keyword list",
@@ -432,6 +438,72 @@ Target job description:
 Original resume:
 """${safeText}"""`;
 }
+
+function buildCoverLetterPrompt(text, jobDescription) {
+  const safeText = text.replace(/"/g, "'").slice(0, 12000);
+  const safeJob = jobDescription.replace(/"/g, "'").slice(0, 6000);
+
+  return `You are an expert cover letter writer for the Canadian job market.
+
+Write a professional cover letter for the candidate based ONLY on facts from their resume and the target job posting.
+
+Rules:
+- Use ONLY employers, roles, skills, education, and achievements supported by the resume.
+- Do NOT invent experience, credentials, or metrics.
+- Match tone to the job posting (professional, concise, confident — not cheesy).
+- Structure: greeting, opening hook, 2–3 body paragraphs tying resume evidence to job requirements, closing with availability.
+- Keep it 250–400 words unless the resume is very sparse.
+- Use Canadian English spelling.
+- If the candidate name is clear from the resume, use it; otherwise use a neutral placeholder like "[Your Name]".
+- Do not include markdown or commentary — return only the cover letter text.
+
+Target job description:
+"""${safeJob}"""
+
+Candidate resume:
+"""${safeText}"""`;
+}
+
+router.post("/cover-letter", aiRateLimit, withAiCache("cover"), async (req, res) => {
+  try {
+    if (!(await isPremiumUnlocked(req))) {
+      return res.status(402).json({
+        error: "Premium required",
+        detail: "Unlock premium to generate a job-tailored cover letter.",
+      });
+    }
+
+    const { text, jobDescription } = req.body;
+    if (!text || typeof text !== "string" || text.trim().length < 80) {
+      return res.status(400).json({ error: "Upload a resume before requesting a cover letter." });
+    }
+
+    if (!jobDescription || typeof jobDescription !== "string" || jobDescription.trim().length < 40) {
+      return res.status(400).json({
+        error: "Job description required",
+        detail: "Paste the target job posting above, then generate your cover letter.",
+      });
+    }
+
+    const coverLetter = await callGemini(
+      buildCoverLetterPrompt(text, jobDescription.trim()),
+      { json: false }
+    );
+
+    return res.json({
+      coverLetter: coverLetter.trim(),
+      disclaimer:
+        "Review and personalize before sending. This letter uses only your resume facts — verify accuracy and add your contact details.",
+    });
+  } catch (err) {
+    const detail = getApiErrorDetail(err);
+    console.error("Cover letter error:", detail);
+    return res.status(503).json({
+      error: "Cover letter temporarily unavailable",
+      detail: toFriendlyAnalyzeError(detail),
+    });
+  }
+});
 
 router.post("/rewrite-resume", aiRateLimit, withAiCache("rewrite"), async (req, res) => {
   try {

@@ -107,12 +107,13 @@ router.get("/pricing", (_req, res) => {
       "Formatting suggestions",
       "Job description match score",
       "Job-tailored resume rewrite",
+      "Job-tailored cover letter",
       "Shareable score card",
     ],
   });
 });
 
-router.post("/create-checkout", async (_req, res) => {
+router.post("/create-checkout", async (req, res) => {
   const stripe = getStripe();
 
   if (!stripe || !STRIPE_PRICE_ID) {
@@ -122,13 +123,22 @@ router.post("/create-checkout", async (_req, res) => {
     });
   }
 
+  const referralCode =
+    typeof req.body?.referralCode === "string"
+      ? req.body.referralCode.trim().slice(0, 40)
+      : "";
+
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
       success_url: `${FRONTEND_URL}/index.html?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${FRONTEND_URL}/index.html?canceled=1`,
-      metadata: { product: "motechco_resume_report" },
+      allow_promotion_codes: true,
+      metadata: {
+        product: "motechco_resume_report",
+        ...(referralCode ? { referral_code: referralCode } : {}),
+      },
     });
 
     return res.json({ url: session.url, sessionId: session.id });
