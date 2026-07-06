@@ -215,4 +215,81 @@ router.post("/email-report", async (req, res) => {
   }
 });
 
+router.post("/partner-inquiry", async (req, res) => {
+  try {
+    const { name, email, organization, orgType, clientsPerMonth, message } = req.body;
+
+    if (!name || String(name).trim().length < 2) {
+      return res.status(400).json({ error: "Name required" });
+    }
+
+    if (!email || !EMAIL_REGEX.test(String(email).trim())) {
+      return res.status(400).json({ error: "Valid email address required" });
+    }
+
+    if (!organization || String(organization).trim().length < 2) {
+      return res.status(400).json({ error: "Organization name required" });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const contactEmail = process.env.CONTACT_EMAIL?.trim() || "mowebsiteco@gmail.com";
+    const subject = `MoTechCo partner inquiry — ${String(organization).trim()}`;
+    const body = [
+      "New B2B partner inquiry from resume.motechco.ca/for-coaches.html",
+      "",
+      `Name: ${String(name).trim()}`,
+      `Email: ${cleanEmail}`,
+      `Organization: ${String(organization).trim()}`,
+      `Type: ${String(orgType || "not specified").trim()}`,
+      `Clients per month: ${String(clientsPerMonth || "not specified").trim()}`,
+      "",
+      "Message:",
+      String(message || "(none)").trim(),
+      "",
+      `Reply to: ${cleanEmail}`,
+    ].join("\n");
+
+    let emailed = false;
+    try {
+      emailed = await sendViaResend(contactEmail, subject, body);
+    } catch (err) {
+      console.warn("Partner inquiry email failed:", err.response?.data || err.message);
+    }
+
+    if (process.env.LEADS_WEBHOOK_URL) {
+      try {
+        await axios.post(
+          process.env.LEADS_WEBHOOK_URL,
+          {
+            name: String(name).trim(),
+            email: cleanEmail,
+            organization: String(organization).trim(),
+            orgType: orgType || null,
+            clientsPerMonth: clientsPerMonth || null,
+            message: message || null,
+            source: "partner-inquiry",
+            emailed,
+          },
+          { timeout: 10000 }
+        );
+      } catch (err) {
+        console.warn("Lead webhook failed:", err.message);
+      }
+    }
+
+    console.log("Partner inquiry:", cleanEmail, organization, "emailed:", emailed);
+
+    return res.json({
+      ok: true,
+      emailed,
+      message: emailed
+        ? "Thanks — we received your inquiry and will reply within 1–2 business days."
+        : `Thanks — inquiry logged. Email us directly at ${contactEmail} and we will follow up.`,
+    });
+  } catch (err) {
+    console.error("Partner inquiry error:", err.message || err);
+    return res.status(500).json({ error: "Could not submit inquiry" });
+  }
+});
+
 module.exports = router;
