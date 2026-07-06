@@ -13,10 +13,13 @@ async function sendViaResend(to, subject, text) {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   if (!apiKey) return false;
 
+  const replyTo = process.env.CONTACT_EMAIL?.trim() || "mowebsiteco@gmail.com";
+
   await axios.post(
     "https://api.resend.com/emails",
     {
       from: process.env.RESEND_FROM || "MoTechCo <onboarding@resend.dev>",
+      reply_to: replyTo,
       to: [to],
       subject,
       text,
