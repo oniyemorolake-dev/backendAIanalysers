@@ -5,7 +5,7 @@ const router = express.Router();
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resume.motechco.ca";
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || "";
-const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$6.99";
+const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$4.99";
 const COMPARE_AT_LABEL = process.env.COMPARE_AT_LABEL || "$29/mo elsewhere";
 
 const verifiedSessions = new Map();

@@ -5,7 +5,7 @@ const router = express.Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resume.motechco.ca";
-const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$6.99";
+const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || "$4.99";
 const savedScoreEmails = new Map();
 const SAVE_SCORE_COOLDOWN_MS = 60 * 60 * 1000;
 
