@@ -464,6 +464,159 @@ Candidate resume:
 """${safeText}"""`;
 }
 
+function buildLinkedInPrompt(text, jobDescription, linkedinAbout) {
+  const safeText = text.replace(/"/g, "'").slice(0, 12000);
+  const safeJob = jobDescription.replace(/"/g, "'").slice(0, 6000);
+  const safeAbout = linkedinAbout
+    ? linkedinAbout.replace(/"/g, "'").slice(0, 4000)
+    : "";
+
+  const aboutSection = safeAbout
+    ? `\nCurrent LinkedIn About section:\n"""${safeAbout}"""`
+    : "\nNo current About section was provided — write one from the resume.";
+
+  return `You are an expert LinkedIn profile writer for the Canadian job market.
+
+Write or improve a LinkedIn "About" section for this candidate, aligned to the target job.
+
+Rules:
+- Use ONLY facts supported by the resume${safeAbout ? " and current About text" : ""}.
+- Do NOT invent employers, titles, credentials, or achievements.
+- First person voice ("I"), professional and readable — not buzzword soup.
+- 150–250 words. Short paragraphs or line breaks for mobile readability.
+- Weave in relevant keywords from the job description where honestly supported.
+- End with a clear professional focus or call to action (e.g. open to roles in X).
+- Return ONLY the About section text — no headings, markdown, or commentary.
+
+Target job description:
+"""${safeJob}"""
+${aboutSection}
+
+Candidate resume:
+"""${safeText}"""`;
+}
+
+function buildInterviewPrepPrompt(text, jobDescription) {
+  const safeText = text.replace(/"/g, "'").slice(0, 12000);
+  const safeJob = jobDescription.replace(/"/g, "'").slice(0, 6000);
+
+  return `You are an expert interview coach. Based ONLY on the resume and job posting, predict likely interview questions and give answer hints tied to the candidate's real experience.
+
+Rules:
+- Use ONLY evidence from the resume for answer hints — no invented stories.
+- Include a mix: role fit, behavioural (STAR-style hints), skills, and situational.
+- Exactly 8 questions.
+- Each answerHints array: 2–4 short bullet strings the candidate can expand on.
+- prepTips: 3 concise general tips for this specific interview.
+
+Respond with ONLY a JSON object:
+{
+  "questions": [
+    { "question": "string", "answerHints": ["string"] }
+  ],
+  "prepTips": ["string"]
+}
+
+Target job description:
+"""${safeJob}"""
+
+Candidate resume:
+"""${safeText}"""`;
+}
+
+router.post("/optimize-linkedin", aiRateLimit, withAiCache("linkedin"), async (req, res) => {
+  try {
+    if (!(await isPremiumUnlocked(req))) {
+      return res.status(402).json({
+        error: "Premium required",
+        detail: "Unlock premium to optimize your LinkedIn About section.",
+      });
+    }
+
+    const { text, jobDescription, linkedinAbout } = req.body;
+    if (!text || typeof text !== "string" || text.trim().length < 80) {
+      return res.status(400).json({ error: "Upload a resume before optimizing LinkedIn." });
+    }
+
+    if (!jobDescription || typeof jobDescription !== "string" || jobDescription.trim().length < 40) {
+      return res.status(400).json({
+        error: "Job description required",
+        detail: "Paste the target job posting above, then optimize your LinkedIn About.",
+      });
+    }
+
+    const about =
+      typeof linkedinAbout === "string" && linkedinAbout.trim().length > 0
+        ? linkedinAbout.trim()
+        : "";
+
+    const linkedInAbout = await callGemini(
+      buildLinkedInPrompt(text, jobDescription.trim(), about),
+      { json: false }
+    );
+
+    return res.json({
+      linkedInAbout: linkedInAbout.trim(),
+      disclaimer:
+        "Paste into LinkedIn and edit to match your voice. Uses only your resume facts — verify accuracy.",
+    });
+  } catch (err) {
+    const detail = getApiErrorDetail(err);
+    console.error("LinkedIn optimize error:", detail);
+    return res.status(503).json({
+      error: "LinkedIn optimization temporarily unavailable",
+      detail: toFriendlyAnalyzeError(detail),
+    });
+  }
+});
+
+router.post("/interview-prep", aiRateLimit, withAiCache("interview"), async (req, res) => {
+  try {
+    if (!(await isPremiumUnlocked(req))) {
+      return res.status(402).json({
+        error: "Premium required",
+        detail: "Unlock premium to generate interview prep for this role.",
+      });
+    }
+
+    const { text, jobDescription } = req.body;
+    if (!text || typeof text !== "string" || text.trim().length < 80) {
+      return res.status(400).json({ error: "Upload a resume before interview prep." });
+    }
+
+    if (!jobDescription || typeof jobDescription !== "string" || jobDescription.trim().length < 40) {
+      return res.status(400).json({
+        error: "Job description required",
+        detail: "Paste the target job posting above, then generate interview prep.",
+      });
+    }
+
+    const generated = await callGemini(buildInterviewPrepPrompt(text, jobDescription.trim()));
+    let parsed = parseJsonFromModelOutput(generated);
+
+    if (!parsed || !Array.isArray(parsed.questions)) {
+      return res.status(503).json({
+        error: "Interview prep temporarily unavailable",
+        detail: "Could not parse interview questions. Try again in a moment.",
+      });
+    }
+
+    return res.json({
+      questions: parsed.questions.slice(0, 10),
+      prepTips: Array.isArray(parsed.prepTips) ? parsed.prepTips.slice(0, 5) : [],
+      disclaimer:
+        "Practice answers out loud using your real examples. Hints are based on your resume only.",
+    });
+  } catch (err) {
+    const detail = getApiErrorDetail(err);
+    console.error("Interview prep error:", detail);
+    return res.status(503).json({
+      error: "Interview prep temporarily unavailable",
+      detail: toFriendlyAnalyzeError(detail),
+    });
+  }
+});
+
 router.post("/cover-letter", aiRateLimit, withAiCache("cover"), async (req, res) => {
   try {
     if (!(await isPremiumUnlocked(req))) {

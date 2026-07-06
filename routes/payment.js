@@ -108,6 +108,8 @@ router.get("/pricing", (_req, res) => {
       "Job description match score",
       "Job-tailored resume rewrite",
       "Job-tailored cover letter",
+      "LinkedIn About optimizer",
+      "Interview question prep",
       "Shareable score card",
     ],
   });
