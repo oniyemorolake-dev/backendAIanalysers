@@ -11,7 +11,10 @@ const COMPARE_AT_LABEL = process.env.COMPARE_AT_LABEL || "$29/mo elsewhere";
 const verifiedSessions = new Map();
 const verifiedReferrals = new Map();
 const redeemedDevices = new Set();
+const refundedSessions = new Set();
 const PAID_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// How often we re-check Stripe for a refund on an already-verified session.
+const REFUND_RECHECK_MS = 10 * 60 * 1000;
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY?.trim();
@@ -21,6 +24,7 @@ function getStripe() {
 
 function isSessionVerified(sessionId) {
   if (!sessionId) return false;
+  if (refundedSessions.has(sessionId)) return false;
   const entry = verifiedSessions.get(sessionId);
   if (!entry) return false;
   if (Date.now() > entry.expiresAt) {
@@ -30,26 +34,91 @@ function isSessionVerified(sessionId) {
   return entry.paid === true;
 }
 
-async function verifyStripeSession(sessionId) {
+function isChargeRefunded(charge) {
+  if (!charge || typeof charge !== "object") return false;
+  return charge.refunded === true || (charge.amount_refunded || 0) > 0;
+}
+
+// Returns true if the session's payment has been (partially or fully) refunded.
+// Any refund revokes premium so refunded customers lose access.
+async function checkSessionRefunded(stripe, sessionId) {
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["payment_intent.latest_charge"],
+    });
+    const pi =
+      session.payment_intent && typeof session.payment_intent === "object"
+        ? session.payment_intent
+        : null;
+    const charge = pi && typeof pi.latest_charge === "object" ? pi.latest_charge : null;
+    return isChargeRefunded(charge);
+  } catch (_) {
+    // If we cannot confirm a refund, do not revoke on this pass.
+    return false;
+  }
+}
+
+async function verifyStripeSession(sessionId, options = {}) {
+  const { checkRefund = false } = options;
   if (!sessionId) return { paid: false, error: "Missing session ID" };
 
-  if (isSessionVerified(sessionId)) {
-    return { paid: true, sessionId };
+  if (refundedSessions.has(sessionId)) {
+    return { paid: false, refunded: true, sessionId };
   }
 
   const stripe = getStripe();
+  const cached = verifiedSessions.get(sessionId);
+  const cachedValid = cached && Date.now() <= cached.expiresAt && cached.paid;
+
+  // Fast path: already verified and not yet due for a refund re-check.
+  if (cachedValid) {
+    const dueForRecheck =
+      checkRefund &&
+      stripe &&
+      Date.now() - (cached.lastRefundCheckAt || 0) > REFUND_RECHECK_MS;
+
+    if (!dueForRecheck) {
+      return { paid: true, sessionId };
+    }
+
+    const refunded = await checkSessionRefunded(stripe, sessionId);
+    if (refunded) {
+      refundedSessions.add(sessionId);
+      verifiedSessions.delete(sessionId);
+      return { paid: false, refunded: true, sessionId };
+    }
+
+    cached.lastRefundCheckAt = Date.now();
+    verifiedSessions.set(sessionId, cached);
+    return { paid: true, sessionId };
+  }
+
   if (!stripe) {
     return { paid: false, error: "Stripe is not configured on the server" };
   }
 
   try {
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["payment_intent.latest_charge"],
+    });
     const paid = session.payment_status === "paid";
+    const pi =
+      session.payment_intent && typeof session.payment_intent === "object"
+        ? session.payment_intent
+        : null;
+    const charge = pi && typeof pi.latest_charge === "object" ? pi.latest_charge : null;
+
+    if (paid && isChargeRefunded(charge)) {
+      refundedSessions.add(sessionId);
+      verifiedSessions.delete(sessionId);
+      return { paid: false, refunded: true, sessionId };
+    }
 
     if (paid) {
       verifiedSessions.set(sessionId, {
         paid: true,
         expiresAt: Date.now() + PAID_SESSION_TTL_MS,
+        lastRefundCheckAt: Date.now(),
       });
     }
 
@@ -89,7 +158,7 @@ async function isPremiumUnlocked(req) {
   }
 
   if (String(unlockToken).startsWith("cs_")) {
-    const result = await verifyStripeSession(unlockToken);
+    const result = await verifyStripeSession(unlockToken, { checkRefund: true });
     return result.paid === true;
   }
 
@@ -190,9 +259,12 @@ router.post("/premium-status", async (req, res) => {
   }
 
   if (String(unlockToken).startsWith("cs_")) {
-    const result = await verifyStripeSession(unlockToken);
+    const result = await verifyStripeSession(unlockToken, { checkRefund: true });
     if (result.paid) {
       return res.json({ premium: true, source: "stripe", unlockToken: result.sessionId });
+    }
+    if (result.refunded) {
+      return res.json({ premium: false, revoked: true, reason: "refunded" });
     }
   }
 
